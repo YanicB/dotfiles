@@ -76,7 +76,7 @@ local function update_signs()
     end
 end
 
--- Add note at current line
+-- Add note at current line using command line prompt
 function M.add_note()
     local rel_path = get_relative_path()
     local line = vim.fn.line(".")
@@ -88,29 +88,30 @@ function M.add_note()
         existing = notes[rel_path][tostring(line)]
     end
 
-    vim.ui.input({ prompt = "Note: ", default = existing }, function(input)
-        if input == nil then
-            return
-        end
+    -- Use cmdline input (cleaner, no buffer artifacts)
+    local ok, input = pcall(vim.fn.input, { prompt = "Note: ", default = existing, cancelreturn = "\n__CANCEL__\n" })
 
-        if input == "" then
-            -- Delete note if empty
-            if notes[rel_path] then
-                notes[rel_path][tostring(line)] = nil
-                if vim.tbl_isempty(notes[rel_path]) then
-                    notes[rel_path] = nil
-                end
+    if not ok or input == "\n__CANCEL__\n" then
+        return
+    end
+
+    if input == "" then
+        -- Delete note if empty
+        if notes[rel_path] then
+            notes[rel_path][tostring(line)] = nil
+            if vim.tbl_isempty(notes[rel_path]) then
+                notes[rel_path] = nil
             end
-            vim.notify("Note deleted", vim.log.levels.INFO)
-        else
-            notes[rel_path] = notes[rel_path] or {}
-            notes[rel_path][tostring(line)] = input
-            vim.notify("Note saved", vim.log.levels.INFO)
         end
+        vim.notify("Note deleted", vim.log.levels.INFO)
+    else
+        notes[rel_path] = notes[rel_path] or {}
+        notes[rel_path][tostring(line)] = input
+        vim.notify("Note saved", vim.log.levels.INFO)
+    end
 
-        save_notes(notes)
-        update_signs()
-    end)
+    save_notes(notes)
+    update_signs()
 end
 
 -- View note at current line
@@ -149,16 +150,12 @@ function M.view_note()
     vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
     vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
 
-    -- Close on any key
-    vim.keymap.set("n", "q", function()
-        vim.api.nvim_win_close(win, true)
-    end, { buffer = buf })
-    vim.keymap.set("n", "<Esc>", function()
-        vim.api.nvim_win_close(win, true)
-    end, { buffer = buf })
+    -- Close on q, Esc, or any other key
+    vim.keymap.set("n", "q", function() vim.api.nvim_win_close(win, true) end, { buffer = buf })
+    vim.keymap.set("n", "<Esc>", function() vim.api.nvim_win_close(win, true) end, { buffer = buf })
 end
 
--- List all notes in project
+-- List all notes using Telescope
 function M.list_notes()
     local notes = load_notes()
     local items = {}
@@ -166,7 +163,7 @@ function M.list_notes()
     for file, file_notes in pairs(notes) do
         for line, note in pairs(file_notes) do
             table.insert(items, {
-                filename = get_project_root() .. "/" .. file,
+                filename = file,
                 lnum = tonumber(line),
                 text = note,
             })
@@ -178,8 +175,40 @@ function M.list_notes()
         return
     end
 
-    vim.fn.setqflist(items)
-    vim.cmd("copen")
+    local pickers = require("telescope.pickers")
+    local finders = require("telescope.finders")
+    local conf = require("telescope.config").values
+    local actions = require("telescope.actions")
+    local action_state = require("telescope.actions.state")
+
+    pickers.new({}, {
+        prompt_title = "Notes",
+        finder = finders.new_table({
+            results = items,
+            entry_maker = function(entry)
+                return {
+                    value = entry,
+                    display = string.format("%s:%d - %s", entry.filename, entry.lnum, entry.text),
+                    ordinal = entry.filename .. entry.text,
+                    filename = get_project_root() .. "/" .. entry.filename,
+                    lnum = entry.lnum,
+                }
+            end,
+        }),
+        sorter = conf.generic_sorter({}),
+        previewer = conf.grep_previewer({}),
+        attach_mappings = function(prompt_bufnr, map)
+            actions.select_default:replace(function()
+                actions.close(prompt_bufnr)
+                local selection = action_state.get_selected_entry()
+                if selection then
+                    vim.cmd("edit " .. selection.filename)
+                    vim.api.nvim_win_set_cursor(0, { selection.lnum, 0 })
+                end
+            end)
+            return true
+        end,
+    }):find()
 end
 
 -- Setup autocmd to update signs
@@ -191,6 +220,7 @@ return {
     dir = ".",
     name = "notes",
     lazy = false,
+    dependencies = { "nvim-telescope/telescope.nvim" },
     keys = {
         { "<leader>na", function() M.add_note() end, desc = "Add note" },
         { "<leader>nv", function() M.view_note() end, desc = "View note" },
