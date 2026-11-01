@@ -21,9 +21,15 @@ end
 -- Create floating window for response
 local function show_response(response)
     local lines = vim.split(response, "\n")
-    local max_width = 80
-    local width = math.min(max_width, math.max(40, #lines[1] or 40))
-    local height = math.min(20, #lines)
+    local width = 60
+    local max_height = 15
+
+    -- Calculate wrapped line count for height
+    local wrapped_lines = 0
+    for _, line in ipairs(lines) do
+        wrapped_lines = wrapped_lines + math.max(1, math.ceil(#line / width))
+    end
+    local height = math.min(max_height, math.max(3, wrapped_lines))
 
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -44,7 +50,11 @@ local function show_response(response)
     vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
     vim.api.nvim_set_option_value("filetype", "markdown", { buf = buf })
     vim.api.nvim_set_option_value("wrap", true, { win = win })
+    vim.api.nvim_set_option_value("linebreak", true, { win = win })
 
+    -- Scroll with j/k, close with q/Esc
+    vim.keymap.set("n", "j", "<C-e>", { buffer = buf })
+    vim.keymap.set("n", "k", "<C-y>", { buffer = buf })
     vim.keymap.set("n", "q", function() vim.api.nvim_win_close(win, true) end, { buffer = buf })
     vim.keymap.set("n", "<Esc>", function() vim.api.nvim_win_close(win, true) end, { buffer = buf })
 end
